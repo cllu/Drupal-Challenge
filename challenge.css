@@ -1,0 +1,40 @@
+/*
+ * For front page
+ * by aptenom
+ */
+#main .region{width:45%;padding:10px;}
+.headline-summary .imageframe{float:left;}
+
+/*For Challenge Display*/
+#challenge-solution-form .form-item{
+} 
+#challenge-solution-form .form-item label {
+}
+.challenge {
+  margin: 10px;
+}
+.challengetable {
+  text-align:center;
+  margin:auto;
+  margin-top:5px;
+  border: 2px solid white;
+}
+.tabletitle{
+   
+}
+
+.status{
+  float:right;
+}
+.table-light{
+  background:#C7C7C8;
+  border:2px solid white;
+  font-size:14px;
+  height:20px;
+}
+.table-slight{
+  background:#EEE;
+  border:2px solid white;
+  font-size:14px;
+  height:20px;
+}

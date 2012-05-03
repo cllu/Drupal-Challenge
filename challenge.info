@@ -1,0 +1,5 @@
+; $Id$
+name = Challenge
+description = For ISCC challenges management
+core = 6.x
+

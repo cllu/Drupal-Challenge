@@ -1,0 +1,730 @@
+<?php
+// $Id$
+
+/**
+ * Implementation of hook_node_info().
+ */
+function challenge_node_info() {
+  return array(
+    'challenge' => array(
+      'name' => t('Challenge'),
+      'module' => 'challenge',
+      'description' => t('A <em>challenge</em> is a single post to an online journal, or <em>challenge</em>.'),
+    )
+  );
+}
+
+/**
+ * Implementation of hook_perm().
+ * Define several permissions here.
+ */
+function challenge_perm() {
+  return array('create challenge', 'delete own challenge', 'delete any challenge', 'edit own challenge', 'edit any challenge', 'submit challenge solution', 'view challenge', 'judge challenge solution');
+}
+
+/**
+ * Implementation of hook_init().
+ * Add module specific css and javascript.
+ */
+function challenge_init() {
+  drupal_add_css(drupal_get_path('module', 'challenge') .'/challenge.css');
+}
+
+/**
+ * Implementation of hook_access().
+ */
+function challenge_access($op, $node, $account) {
+  switch ($op) {
+    case 'view':
+      return user_access('view challenge', $account);
+    case 'create':
+      // Anonymous users cannot post even if they have the permission. 
+      return user_access('create challenge', $account) && $account->uid ? TRUE : NULL;
+    case 'update':
+      return user_access('edit any challenge', $account) || (user_access('edit own challenge', $account) && ($node->uid == $account->uid)) ? TRUE : NULL;
+    case 'delete':
+      return user_access('delete any challenge', $account) || (user_access('delete own challenge', $account) && ($node->uid == $account->uid)) ? TRUE : NULL;
+  }
+}
+
+/**
+ * Implementation of hook_user().
+ * Add challenge link to user profile page.
+ */
+function challenge_user($type, &$edit, &$user) {
+  if ($type == 'view' && user_access('create challenge', $user)) {
+    $user->content['summary']['challenge'] =  array(
+      '#type' => 'user_profile_item',
+      '#title' => t('challenge'),
+      // l() escapes the attributes, so we should not escape !username here.
+      '#value' => l(t('View recent passed challenge'), "challenge/passlog/$user->uid", array('attributes' => array('title' => t("Read !username's latest passed challenges.", array('!username' => $user->name))))),
+      '#attributes' => array('class' => 'challenge'),
+    );
+  }
+}
+
+/**
+ * Implementation of hook_help().
+ */
+function challenge_help($path, $arg) {
+  switch ($path) {
+    case 'admin/help#challenge':
+      $output = '<p>'. t('This is module developed for ISCC, by aptenom@gmail.com.') .'</p>';
+      return $output;
+  }
+}
+
+/**
+ * Implementation of hook_form().
+ * 
+ */
+function challenge_form(&$node) {
+  // The site admin can decide if this node type has a title and body, and how
+  // the fields should be labeled. We need to load these settings so we can
+  // build the node form correctly.
+  $type = node_get_types('type', $node);
+
+  if ($type->has_title) {
+    $form['title'] = array(
+      '#type' => 'textfield',
+      '#title' => check_plain($type->title_label),
+      '#required' => TRUE,
+      '#default_value' => $node->title,
+      '#weight' => -5,
+    );
+  }
+
+  if ($type->has_body) {
+    // In Drupal 6, we can use node_body_field() to get the body and filter
+    // elements. This replaces the old textarea + filter_form() method of
+    // setting this up. It will also ensure the teaser splitter gets set up
+    // properly.
+    $form['body_field'] = node_body_field($node, $type->body_label, $type->min_word_count);
+  }
+
+  $form['hint'] = array(
+    '#type' => 'textarea',
+    '#title' => t('Hint'),
+    '#default_value' => isset($node->hint) ? $node->hint : '',
+  );
+  // Now we define the form elements specific to our node type.
+  $form['year'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Year'),
+    '#default_value' => isset($node->year) ? $node->year : '2010',
+  );
+  // categories of challenge, very ugly, need modification.
+  $form['category'] = array(
+    '#type' => 'radios',
+    '#title' => t('Challenge Type'),
+    '#default_value' => isset($node->category) ? $node->category : '',
+    '#options' => array(
+	    'basic' => t('Basic'), 
+	    'script' => t('Script'), 
+	    'kernel' => t('Kernel'), 
+	    'reality' => t('Reality'),
+      'crack' => t('Crack'),
+      'overflow' => t('Overflow'),
+    ),
+  );
+  $form['ord'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Display Order'),
+    '#default_value' => isset($node->ord) ? $node->ord : '',
+  );
+  $form['score'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Score'),
+    '#default_value' => isset($node->score) ? $node->score : '',
+  );
+  $form['#attributes'] = array(
+    'enctype' => "multipart/form-data"
+  );
+  $form['file'] = array(
+    '#type' => 'file',
+    '#title' => t('Related File'),
+    '#default_value' => isset($node->file) ? $node->file : '',
+    '#description' => 'Only support ONE file. ' . (($node->file != '') ? '<a href="'.file_create_url($node->file).'"> File uploaded</a>' : 'Currently no file'),
+  );
+  $form['judgetype'] = array(
+    '#type' => 'radios',
+	  '#title' => t('Judge Type'),
+    '#default_value' => isset($node->judgetype) ? $node->judgetype : 'passwd',
+    '#options' => array(
+      'passwd' => t('Password'), 
+      'manual' => t('Manual')
+	  ),
+  );
+  $form['dynamic'] = array(
+    '#type' => 'checkbox',
+    '#title' =>'Custom Submit Form',
+    '#default_value' => isset($node->dynamic) ? $node->dynamic : 0,
+    '#description' => t('the system will not generate password or solution sumbit form for you. thus you can specify the form yourself for some eccentric challenge.'),
+  );
+  $form['phpcode'] = array(
+    '#type' => 'textarea',
+    '#title' => t('PHP code for password validation'),
+    '#default_value' => $node->phpcode,
+    '#description' => t('The code will be executed after user submit his password. You can set $passed=1 to indicate that the user passed the chanllenge.'),
+  );
+  $form['passwd'] = array(
+    '#type' => 'textfield',
+	'#title' => t('Password'),
+	'#default_value' => isset($node->passwd) ? $node->passwd : '',
+  );
+  $form['judger'] = array(
+    '#type' => 'textfield',
+	'#title' => t('Judger'),
+	'#default_value' => isset($node->judger) ? $node->judger : '',
+  );
+  return $form;
+}
+
+/**
+ * Implementation of hook_validate().
+ * When we submit the form, we should verify some items.
+ */
+function challenge_validate(&$node) {
+  // make no sense since we have defined it in the challenge_form()
+  // TODO write something really useful.
+  if ($node->score) {
+    if (!is_numeric($node->score)) {
+      form_set_error('score', t('The score must be a number.'));
+    }
+  }
+  else {
+    // Let an empty field mean "zero."
+    $node->score = 0;
+  }
+  
+}
+
+/**
+ * Handle the file upload process. 
+ * TODO use druple api
+ */ 
+function challenge_fileupload(&$node) {  
+   if (isset($_FILES['files']) && $_FILES['files']['name']['file']){
+    $root = $_SERVER['DOCUMENT_ROOT'];
+
+    $dir =  file_directory_path() . '/challenge/challenge/';
+    $dir.= $node->year.'/'.$node->category.'/'.$node->ord.'/';
+    mkdir($root.$dir, 0777, true);
+    //file_check_directory($mdir, true);
+    $file = file_save_upload('file', $validators,  $dir, false);
+    $node->file = $file->filepath;
+  }
+}
+
+/**
+ * Implementation of hook_insert().
+ * TODO the code here is badly formatted.
+ */
+function challenge_insert($node) {
+  challenge_fileupload($node);
+  db_query("INSERT INTO {challenge} (vid, nid, title, body, teaser, hint, year, category, ord, score, file, passed, judgetype, passwd, dynamic, judger, phpcode) 
+                             VALUES (%d, %d, '%s', '%s', '%s', '%s', %d, '%s', %d, %d,'%s', %d, '%s', '%s', '%d', '%s', '%s')", 
+                             $node->vid, $node->nid, $node->title, $node->body, $teaser, $node->hint,  $node->year, $node->category, $node->ord, $node->score, 
+                             $node->file, $node-> passed, $node->judgetype, $node->passwd, $node->dynamic, $node->judger, $node->phpcode);
+}
+
+/**
+ * Implementation of hook_update().
+ *
+ */
+function challenge_update($node) {
+  challenge_fileupload($node);
+  // if this is a new node or we're adding a new revision,
+  if ($node->revision) {
+    challenge_insert($node);
+  }
+  else {
+    db_query("UPDATE {challenge} SET title = '%s', body = '%s', teaser = '%s', hint = '%s', year = %d, category = '%s', ord = %d, score = %d, file = '%s', passed = %d, judgetype = '%s', passwd = '%s', dynamic=%d, judger = '%s', phpcode = '%s' WHERE vid = %d", $node->title, $node->body, $teaser, $node->hint, $node->year, $node->category, $node->ord, $node->score, $node->file, $node-> passed, $node->judgetype, $node->passwd, $node->dynamic, $node->judger, $node->phpcode, $node->vid);
+  }
+}
+
+/**
+ * Implementation of hook_delete()
+ * We need to delete the data in `challenge` table
+ */
+function challenge_delete($node) {
+  db_query('DELETE FROM {challenge} WHERE nid = %d', $node->nid);
+}
+
+/**
+ * Implementation of hook_load().
+ * Fetch the information stored in `challenge` table
+ */
+function challenge_load($node) {
+  $additions = db_fetch_object(db_query('SELECT * FROM {challenge} WHERE vid = %d', $node->vid));
+  return $additions;
+}
+
+/**
+ * Implementation of hook_view().
+ * Check the challenge id. Take user to page with clean url.
+ */
+function challenge_view($node, $teaser = FALSE, $page = FALSE) {
+  if (!($node->year && $node->category && $node->ord)){
+    echo 'No Challenge';
+  }
+  else {
+    Header("HTTP/1.1 303 See Other");
+    Header("Location:/challenge/".$node->year.'/'.$node->category.'/'.$node->ord);
+    exit;
+  }
+}
+
+/**
+ * Implementation of hook_theme()
+ * Define the theme hook.
+ */
+function challenge_theme() {
+  return array(
+    'challenge_index' => array(
+      'template' => 'challenge-index',
+      'arguments' => array(),
+    ),
+    'challenge_year' => array(
+      'template' => 'challenge-year',
+      'arguments' => array('challenges' => NULL),
+    ),
+    'challenge_display' => array(
+      'template' => 'challenge-display',
+      'arguments' => array('item' => NULL),
+    ),
+    'challenge_result' => array(
+      'template' => 'challenge-result',
+      'arguments' => array('message' => NULL),
+    ),
+    'challenge_category_list' => array(
+	  'template' => 'challenge-category-list',
+      'arguments' => array('list' => NULL, 'passed' => NULL),
+    ),
+    'challenge_manual_judge' => array(
+      'template' => 'challenge-manual-judge',
+      'arguments' => array('list' => NULL),
+    ),
+    'challenge_ranking_list' => array(
+      'template' => 'challenge-rangking-list',
+      'arguments' => array('title' => NULL, 'votes' => NULL, 'total_votes' => NULL, 'vote' => NULL, 'block' => NULL),
+    ),
+  );
+}
+
+/**
+ * Implementation of hook_link().
+ * 
+ */
+function challenge_link($type, $node = NULL, $teaser = FALSE) {
+  $links = array();
+
+  if ($type == 'node' && $node->type == 'challenge') {
+    if (arg(0) != 'challenge' || arg(1) != $node->uid) {
+      // This goes to l() and therefore escapes !username in both the title and attributes.
+      $links['challenge_usernames_challenge'] = array(
+        'title' => t("!username's challenge", array('!username' => $node->name)),
+        'href' => "challenge/$node->uid",
+        'attributes' => array('title' => t("Read !username's latest challenge entries.", array('!username' => $node->name)))
+      );
+    }
+  }
+
+  return $links;
+}
+
+/**
+ * Implementation of hook_menu().
+ * Clean URL defination
+ */
+function challenge_menu() {
+  $items['challenge'] = array(
+    'title' => '',
+    'page callback' => 'challenge_index',
+    'access arguments' => array('view challenge'),
+    'type' => MENU_SUGGESTED_ITEM,
+    'file' => 'challenge.pages.inc',
+  );
+  $items['challenge/passlog/%'] = array(
+    'title' => 'Pass Log',
+    'page callback' => 'challenge_passlog',
+    'page arguments' => array(2),
+    'access arguments' => array('view challenge'),
+    'file' => 'challenge.pages.inc',
+	);
+  $items['challenge/passlog'] = array(
+    'title' => 'Pass Log',
+    'page callback' => 'challenge_passlog',
+    'page arguments' => array(2),
+    'access arguments' => array('view challenge'),
+    'file' => 'challenge.pages.inc',
+	);
+  $items['challenge/ranking'] = array(
+    'title' => 'Ranking List',
+    'access arguments' => array('view challenge'),
+    'page callback' => 'challenge_ranking',
+    'file' => 'challenge.pages.inc',
+	);
+  $items['challenge/%'] = array(
+    'title' => '',
+    'page callback' => 'challenge_year',
+    'page arguments' => array(1),
+    'access arguments' => array('view challenge'),
+    'file' => 'challenge.pages.inc',
+  );
+  $items['challenge/%/%'] = array(
+    'title' => '',
+    'page callback' => 'challenge_category_list',
+    'page arguments' => array(1, 2),
+    'access arguments' => array('view challenge'),
+    'file' => 'challenge.pages.inc',
+  );
+  $items['challenge/%/%/%'] = array(
+    'title' => '',
+    'page callback' => 'challenge_display',
+    'page arguments' => array(1, 2, 3),
+    'access arguments' => array('view challenge'),
+    'file' => 'challenge.pages.inc',
+  );
+  $items['challenge/%/%/%/submit'] = array(
+    'title' => '',
+    'page callback' => 'challenge_submit',
+    'page arguments' => array(1, 2, 3),
+    'access arguments' => array('submit challenge solution'),
+  );
+  $items['challenge/manual_judge/%'] = array(
+    'title' => 'Challeng Manual Judge',
+    'page callback' => 'challenge_manual_judge',
+    'page arguments' => array(2),
+    'access arguments' => array('judge challenge solution'),
+    'file' => 'challenge.pages.inc',
+	);
+  $items['challenge/manual_judge'] = array(
+    'title' => '',
+    'page callback' => 'challenge_manual_judge',
+    'access arguments' => array('judge challenge solution'),
+    'file' => 'challenge.pages.inc',
+  );
+  $items['challenge/manual_judge/judge/%/%/%'] = array(
+    'title' => 'Challeng Manual Judge',
+    'page callback' => 'challenge_judge',
+    'page arguments' => array(3,4,5),
+    'access arguments' => array('judge challenge solution'),
+	);
+  $items['challenge/recount'] = array(
+    'title' => 'Recount',
+    'page callback' => 'challenge_recount',
+    'access arguments' => array('edit any challenge'),
+  );
+  $items['challenge/test'] = array(
+    'title' => 'Test',
+    'page callback' => 'challenge_test',
+    'access arguments' => array('edit any challenge'),
+  );
+  return $items;
+}
+
+/*
+ * Use drupal API to generate the form for challenge page.
+ */
+function challenge_solution_form($form_state, $challenge) {
+  if ($challenge->dynamic){
+    return '';
+  }
+  switch($challenge->judgetype)
+  {
+    case 'passwd':
+      $form['password'] = array(
+        '#type' => 'textfield',
+        '#size' => 20,
+        //'#title' => t('submit your password'),
+       );
+      break;
+    case 'manual':
+      $form['file'] = array(
+        '#type' => 'file',
+        //'#title' => 'submit your solution',
+      );
+      $form['#attributes'] = array(
+        'enctype' => "multipart/form-data",
+      );
+      break;
+    default:
+      break;
+  }
+  if (isset($form)){
+    $form['submit'] = array(
+      '#type' => 'submit',
+      '#value' => t('Submit You Solution'),
+    );
+    $form['#redirect'] = FALSE;
+    $form['#action'] = url("challenge/$challenge->year/$challenge->category/$challenge->ord/submit");
+  }
+
+  return $form;
+}
+
+//function challenge_solution_form_submit($form, &$form_state) {
+  //print_r($_POST);
+  //print_r($form);
+  //drupal_set_message('submitted');
+
+  //$content =  'submitted';
+//}
+
+/*
+ * Just for test. 
+ */
+function challenge_test(){
+  $node->judgetype='manual';
+  $node->year=2010;
+  $node->category = 'basic';
+  $node->ord = 2;
+  return drupal_get_form('challenge_solution_form', $node);
+}
+
+/*
+ * Headle the data user submitted.
+ */
+function challenge_submit($year, $category, $ord) {
+  global $user;
+
+  $result = db_query("SELECT c.nid, c.year, c.category, c.ord, c.score, n.title, c.judgetype, c.dynamic, c.passwd, c.judger, c.phpcode from {challenge} c INNER JOIN {node} n ON c.nid=n.nid WHERE c.year=%d AND c.category='%s' AND c.ord=%d", $year, $category, $ord);
+  if (!$result){
+    return 'No challenge';
+  }
+ 
+  $challenge = db_fetch_object($result);
+
+  drupal_set_breadcrumb(array(
+      l(t('Home'), NULL),
+      l(t('Challenge'), 'challenge'),
+      l(t('!year', array('!year' => $challenge->year)), 'challenge/'.$challenge->year),
+      l(t('!category', array('!category' => $challenge->category)), 'challenge/'.$challenge->year.'/'.$challenge->category),
+      l(t('!ord', array('!ord' => $challenge->ord)), "challenge/$challenge->year/$challenge->category/$challenge->ord"),
+    )
+  );
+
+
+  switch($challenge->judgetype) {
+    case 'passwd':
+      if($submitted_passwd = check_plain($_POST['password'])) {
+        
+        // not fixed password
+        if ($challenge->passwd == ''){
+          $passed = 0;
+          $sessionname = 'passwd_'.$challenge->year.'_'.$challenge->category.'_'.$challenge->ord;
+          if (isset($_SESSION[$sessionname]) && $_SESSION[$sessionname] == $submitted_passwd)
+            $passed = 1;
+          if ($challenge->phpcode){
+            eval($challenge->phpcode);
+          }
+        }
+        
+        // For fixed password
+        if ( $passed || $submitted_passwd == $challenge->passwd) {
+          
+          if (challenge_user_passed($challenge, $user)){
+            return theme('challenge_result', 'Right, but you have passed the challenge');
+          }
+          challenge_pass($challenge, $user);
+          return 'Cheers! Challenge passed!';
+        }
+        else {
+          db_query("UPDATE {challenge} SET submitted=submitted+1 WHERE nid=%d", $challenge->nid);
+          return theme('challenge_result', 'Password Wrong');
+        }
+      }else {
+        return theme('challenge_result', 'None password!');
+      }
+      break;
+    case 'manual':
+      if (challenge_user_passed($challenge, $user))
+        return theme('challenge_result', t('You have passed the challenge already'));
+
+      if ( isset($_FILES['files']) && $_FILES['files']['name']['file']){
+        $root = $_SERVER['DOCUMENT_ROOT'];
+
+        $dir =  file_directory_path() . '/challenge/solutions/';
+        $dir.= "$challenge->year/$challenge->category/$challenge->ord/";
+        @mkdir($root.$dir, 0777, TRUE);
+        //file_check_directory($mdir, true);
+        $validators = array(
+          'file_validate_size' => array(500 * 1024),
+          'file_validate_extensions' => array('rar zip gzip tar gz bz2'),
+        );
+
+        if ($file = file_save_upload('file', $validators,  $dir, FILE_EXISTS_RENAME)) {
+          $info = pathinfo($file->filepath);
+          $ext = $info['extension'];
+          file_move($file, $dir.$user->uid.'.'.$ext, FILE_EXISTS_REPLACE);
+          db_query("UPDATE {manual_judge} SET file='%s' WHERE uid=%d AND nid=%d", $file->filepath, $user->uid, $challenge->nid);
+          if ( !db_affected_rows() ){ 
+            db_query("INSERT INTO {manual_judge} (uid, uname, nid, chname, judger, file, timestamp, status, judgedby) VALUES (%d, '%s', %d, '%s', '%s', '%s', %d, 0, '')", $user->uid, $user->name, $challenge->nid, $challenge->title, $challenge->judger, $file->filepath, mktime() );
+          }
+          db_query("UPDATE {challenge} SET submitted=submitted+1 WHERE nid=%d", $challenge->nid);
+        
+          return theme('challenge_result', t('Solution file uploaded. Please wait for judgement.'));
+        }
+        else{
+          return theme('challenge_result', t('Upload failed! Pay attention to the file size and extensions!'));
+        }
+      }else{
+        return theme('challenge_result', t('Solution file upload failed. Please contact site admin.'));
+      }
+      break;
+    default:
+      Header("HTTP/1.1 303 See Other");
+      Header("Location:/challenge/".$challenge->year.'/'.$challenge->category.'/'.$challenge->ord);
+      exit;
+  }
+}
+
+/*
+ * User has passed some challenge. 
+ * Be sure that the user hasn't passed the challenge 
+ */
+function challenge_pass($challenge, $user, $judger = NULL){
+  
+  db_query("UPDATE {users} u SET score=score+%d, passed=concat(passed, '%s,') WHERE u.uid=%d", $challenge->score, $challenge->nid, $user->uid);
+    
+  db_query("INSERT INTO {passlog} (nid, chname, uid, uname, time, judgetype, passwd, judger) VALUES (%d, '%s', %d, '%s', %d, '%s', '%s', '%s')", $challenge->nid, $challenge->title, $user->uid, $user->name, mktime(), $challenge->judgetype, $challenge->passwd, $judger);
+    
+  db_query("UPDATE {challenge} SET passed=passed+1, submitted=submitted+1 WHERE nid=%d", $challenge->nid);
+
+  return TRUE;
+}
+
+/*
+ * Check if user has passed a challenge.
+ * Be sure that the user hasn't passed the challenge 
+ */
+function challenge_user_passed($challenge, $user){
+  $result = db_query("SELECT u.passed FROM {users} u WHERE u.uid=%d", $user->uid);
+  if ($result){
+    $passed = db_fetch_object($result)->passed;
+    $passed = explode(',', $passed);
+    if (in_array($challenge->nid, $passed))
+      return TRUE;
+  }
+  return FALSE;
+}
+
+/**
+ * Judge
+ */
+function challenge_judge($nid, $uid, $status) {
+  global $user;
+  $result = db_query("SELECT c.nid, c.title, c.judgetype, c.judger, c.score FROM {challenge} c WHERE c.nid=%d", $nid);
+  if(!$result){
+    return 'No this challenge!';
+  }
+  $challenge = db_fetch_object($result);
+
+  $result = db_query("SELECT u.uid, u.name FROM {users} u WHERE u.uid=%d", $uid);
+  if (!$result)
+    return 'No this user';
+  $member = db_fetch_object($result);
+
+  if ( !(in_array($user->name, explode(',', $challenge->judger)) || in_array('Site Administrator', $user->roles) ))
+    return 'No access, you are not in the judger list for the challenge.';
+  if($challenge->judgetype != 'manual')
+    return 'Challenge does not judge manually';
+
+  switch ($status){
+    case 1:
+      if(challenge_user_passed($challenge, $member))
+        return 'Oops. User has passed the challenge';
+      challenge_pass($challenge, $member, $user->name);
+      db_query("UPDATE {manual_judge} SET status=1 WHERE nid=%d and uid=%d", $nid, $uid);
+      return 'Done. User passed the challenge';
+      break;
+    case 2:
+      db_query("UPDATE {manual_judge} SET status=2 WHERE nid=%d and uid=%d", $nid, $uid);
+      return 'Done. User failed the challenge';
+      break;
+    default:
+      return 'Undefined operation';
+      break;
+  }
+}
+
+
+/**
+ * Implementation of hook_block().
+ *
+ */
+function challenge_block($op = 'list', $delta = 0) {
+  global $user;
+  
+  if ($op == 'list') {
+    $block[0]['info'] = t('Ranking List');
+  	$block[1]['info'] = t('Newly Passed');
+    return $block;
+  }
+  else if ($op == 'configure' && $delta == 0) {
+  
+  }
+  else if ($op == 'view') {
+    switch ($delta) {
+      case 0:
+	      if (user_access('access content')) {
+            $result = db_query_range(db_rewrite_sql("SELECT u.uid, u.name, u.score FROM {users} u ORDER BY u.score DESC"), 0, 10);
+            $block['content'] = '<ol>';
+            while($row = db_fetch_object($result)){
+              if ($row->uid)
+                $block['content'] .= '<li>'.'<span style="float:right;margin-right:30px;">'.$row->score . '</span><span style=""><a href="/user/'.$row->uid.'">'.$row->name.'</a></span></li>';
+            }
+            $block['content'] .= '</ol>';
+            $block['content'] .= '<a href="/challenge/ranking">view more</a>';
+            $block['subject'] = t('Ranking List');
+            return $block;
+          }
+		    break;
+	    case 1:
+        if (user_access('access content')) {
+          $result = db_query_range("SELECT * FROM {passlog} ORDER BY time DESC", 0, 10);
+          $block['content'] = '<ul>';
+          while($row = db_fetch_object($result)) {
+            $block['content'] .= '<li>'.'<span style="float:right; margin-right:30px;">'.'<a href="/node/'.$row->nid.'">'.$row->chname.'</a></span>'.'<a href="/user/'.$row->uid.'">'.$row->uname . '</a></li>';
+          }
+          $block['content'] .= '</ul>';
+          $block['content'] .= '<a href="/challenge/passlog">view more</a>';
+          $block['subject'] = t('Newly Passed');
+          return $block;
+        }
+	      break;
+	}
+  }
+}
+
+/*
+ * Recount the score.
+ */
+function challenge_recount()
+{
+  $modified = 0;
+  $query = "SELECT u.passed, u.uid, u.score FROM {users} u WHERE u.passed != ''";
+  $result = db_query($query);
+  while ($row = db_fetch_object($result)){
+    $score = 0;
+    $passed = $row->passed;
+
+      print_r($row);
+    if ($passed != '' && $row->uid) {
+      $passed = explode(',', $passed);
+      foreach ($passed as $ch_nid) {
+        if ($ch_nid != '') {
+          $re = db_query("SELECT score FROM {challenge} WHERE nid=$ch_nid");
+          if ($re)
+            $score += db_fetch_object($re)->score;
+        }
+      }
+    }
+    if ($score != $row->score){
+      db_query("UPDATE {users} SET score=$score WHERE uid=$row->uid");
+      $modified += 1;
+    }
+  }
+  return "Done! $modified user(s) modified!";
+}
